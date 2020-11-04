@@ -17,6 +17,7 @@ struct Module;
 } // namespace jit
 } // namespace torch
 namespace c10 {
+
 template <class Key, class Value>
 class Dict;
 template <class T>
@@ -50,6 +51,7 @@ struct GenericDict;
 struct Object;
 struct PyObjectHolder;
 struct EnumHolder;
+struct ComplexHolder;
 } // namespace ivalue
 
 // This is an owning wrapper for a c10::optional<std::vector<T>>
@@ -93,6 +95,7 @@ struct OptionalArray {
   _(None)                    \
   _(Tensor)                  \
   _(Double)                  \
+  _(ComplexDouble)           \
   _(Int)                     \
   _(Bool)                    \
   _(Tuple)                   \
@@ -380,6 +383,12 @@ struct CAFFE2_API IValue final {
     return payload.as_double;
   }
 
+  // ComplexDouble
+  IValue(c10::intrusive_ptr<ivalue::ComplexHolder> c);
+  bool isComplexDouble() const { return Tag::ComplexDouble == tag; }
+  c10::intrusive_ptr<ivalue::ComplexHolder> toComplexDouble() &&;
+  c10::intrusive_ptr<ivalue::ComplexHolder> toComplexDouble() const&;
+
   // Future
   IValue(c10::intrusive_ptr<ivalue::Future> v);
   bool isFuture() const {
@@ -568,22 +577,26 @@ struct CAFFE2_API IValue final {
     return i;
   }
 
-  // Scalar, which gets encoded as either an Int or a Double
+  // Scalar, which gets encoded as either an Int, a Double or a ComplexDouble
   IValue(at::Scalar s) : IValue() {
     if (s.isFloatingPoint()) {
       *this = s.toDouble();
+    } else if (s.isComplex()) {
+      *this = ivalue::ComplexHolder(s.toComplexDouble());
     } else {
       *this = s.toLong();
     }
   }
   bool isScalar() const {
-    return isDouble() || isInt();
+    return isDouble() || isInt() || isComplexDouble();
   }
   at::Scalar toScalar() const {
     if (isDouble())
       return toDouble();
     else if (isInt())
       return toInt();
+    else if (isComplexDouble())
+      return (*toComplexDouble()).val;
     throw std::runtime_error("IValue is not a Scalar");
   }
 

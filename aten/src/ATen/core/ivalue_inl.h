@@ -86,6 +86,14 @@ inline c10::intrusive_ptr<c10::RRefInterface> IValue::toRRef() const& {
   AT_ASSERT(isRRef(), "Expected RRef but got ", tagKind());
   return toIntrusivePtr<c10::RRefInterface>();
 }
+inline c10::intrusive_ptr<ivalue::ComplexHolder> IValue::toComplexDouble() && {
+  AT_ASSERT(isComplexDouble(), "Expected ComplexDouble but got ", tagKind());
+  return moveToIntrusivePtr<ivalue::ComplexHolder>();
+}
+inline c10::intrusive_ptr<ivalue::ComplexHolder> IValue::toComplexDouble() const& {
+  AT_ASSERT(isComplexDouble(), "Expected ComplexDouble but got ", tagKind());
+  return toIntrusivePtr<ivalue::ComplexHolder>();
+}
 inline c10::intrusive_ptr<at::Quantizer> IValue::toQuantizer() && {
   AT_ASSERT(isQuantizer(), "Expected Quantizer but got ", tagKind());
   return moveToIntrusivePtr<at::Quantizer>();
@@ -645,6 +653,11 @@ struct ivalue::EnumHolder : c10::intrusive_ptr_target {
   IValue value_;
 };
 
+struct ivalue::ComplexHolder : c10::intrusive_ptr_target {
+  public:
+    ComplexHolder(c10::complex<double> c) : val(c) {}
+    c10::complex<double> val;
+}
 #undef TORCH_FORALL_TAGS
 
 namespace detail {
@@ -682,6 +695,7 @@ DEFINE_TO(at::Tensor, toTensor)
 DEFINE_TO(c10::Stream, toStream)
 DEFINE_TO(float, toDouble)
 DEFINE_TO(double, toDouble)
+DEFINE_TO(c10::intrusive_ptr<ivalue::ComplexHolder>, toComplexDouble)
 DEFINE_TO(unsigned char, toInt)
 DEFINE_TO(signed char, toInt)
 DEFINE_TO(unsigned short, toInt)
@@ -698,6 +712,7 @@ DEFINE_TO(c10::intrusive_ptr<ivalue::Object>, toObject)
 DEFINE_TO(at::Scalar, toScalar)
 DEFINE_TO(c10::List<int64_t>, toIntList)
 DEFINE_TO(c10::List<double>, toDoubleList)
+DEFINE_TO(c10::List<ivalue::ComplexHolder>>, toComplexDoubleList)
 DEFINE_TO(c10::List<bool>, toBoolList)
 DEFINE_TO(c10::List<at::Tensor>, toTensorList)
 DEFINE_TO(c10::impl::GenericList, toList)
@@ -1112,6 +1127,11 @@ inline IValue::IValue(c10::intrusive_ptr<c10::RRefInterface> v)
 
 inline IValue::IValue(c10::intrusive_ptr<at::Quantizer> v)
     : tag(Tag::Quantizer), is_intrusive_ptr(true) {
+  payload.as_intrusive_ptr = v.release();
+}
+
+inline IValue::IValue(c10::intrusive_ptr<ivalue::ComplexHolder> v)
+    : tag(Tag::ComplexDouble), is_intrusive_ptr(true) {
   payload.as_intrusive_ptr = v.release();
 }
 

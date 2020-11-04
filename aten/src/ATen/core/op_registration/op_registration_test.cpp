@@ -1204,6 +1204,10 @@ TEST(OperatorRegistrationTest, testAvailableArgTypes) {
     c10::List<double>(), [] (const c10::List<double>& v) {EXPECT_EQ(0, v.size());},
     c10::List<double>(), [] (const IValue& v) {EXPECT_EQ(0, v.to<c10::List<double>>().size());},
     "(float[] a) -> float[]");
+  // testArgTypes<c10::List<c10::complex<double>>>::test(
+  //   c10::List<c10::complex<double>>(), [] (const c10::List<c10::complex<double>>& v) {EXPECT_EQ(0, v.size());},
+  //   c10::List<c10::complex<double>>(), [] (const IValue& v) {EXPECT_EQ(0, v.to<c10::List<c10::complex<double>>>().size());},
+  //   "(c10::complex<double>[] a) -> c10::complex<double>[]");
   testArgTypes<c10::List<int64_t>>::test(
     c10::List<int64_t>(), [] (const c10::List<int64_t>& v) {EXPECT_EQ(0, v.size());},
     c10::List<int64_t>(), [] (const IValue& v) {EXPECT_EQ(0, v.to<c10::List<int64_t>>().size());},
