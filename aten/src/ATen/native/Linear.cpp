@@ -76,6 +76,16 @@ static Tensor sumproduct_pair(const Tensor& left_, const Tensor& right_, IntArra
       ro_size *= right.size(i);
     }
   }
+
+  if (left_.is_cuda()) {
+    // Experiments showed that for the cases below it is faster to multiply and sum
+    // instead of reducing to bmm on CUDA. see https://github.com/pytorch/pytorch/pull/48184
+    int64_t batch_size = lro_size * lo_size * ro_size;
+    if (lo_size == 1 && ro_size == 1 && (batch_size < 1024 || sum_size < 256)) {
+      return at::mul(left, right).sum(sum_dims_, keepdim);
+    }
+  }
+
   // we now work with the following permutations / shapes.
   // the pipeline is permute inputs -> reshape inputs -> batch matrix mul -> reshape(view) output -> permute output
   // output: "lro, lo, 1-for-summed-dims, ro" with orgiginal shape dimensions
