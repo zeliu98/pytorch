@@ -494,6 +494,9 @@ const ExecutionPlan& ProfilingGraphExecutorImpl::getOptimizedPlanFor(
     // before any other pass that could insert `prim::iprofile_value` node on
     // `aten::_grad_sum_to_size` input.
     InsertProfileNodesForSpecializeAutogradZero(pr_.get());
+    if (RegisterCudaFuseGraph::isRegistered()) {
+      torch::jit::fuser::cuda::InsertProfileNodesForCUDAFuser(pr_.get());
+    }
     GRAPH_DUMP("Profiled Graph: ", pr_->graph());
     profiling_plan_ = ExecutionPlan(pr_->graph(), function_name_);
     // fall-through
