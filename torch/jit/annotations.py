@@ -331,6 +331,12 @@ def try_ann_to_type(ann, loc):
         if torch._jit_internal.can_compile_class(ann) and not issubclass(ann, ignored_builtin_classes):
             torch.jit._script._recursive_compile_class(ann, loc)
             return ClassType(qualified_name)
+    if isinstance(ann, torch.jit._script.ScriptClassWrapper):
+        # Get the wrapped class (which will be a regular Python class)
+        # and look up the JIT type associated with that.
+        ann = ann.get_wrapped_class()
+        qualified_name = _qualified_name(ann)
+        return ClassType(qualified_name)
 
     # Maybe resolve a NamedTuple to a Tuple Type
     def fake_rcb(key):

@@ -106,6 +106,7 @@ struct PythonResolver : public Resolver {
     }
 
     py::bool_ isClass = py::module::import("inspect").attr("isclass")(obj);
+
     if (!py::cast<bool>(isClass)) {
       return nullptr;
     }
@@ -118,7 +119,14 @@ struct PythonResolver : public Resolver {
         py::cast<std::string>(py::module::import("torch._jit_internal")
                                   .attr("_qualified_name")(obj)));
 
-    return get_python_cu()->get_type(qualifiedName);
+    auto pyClass =
+        py::module::import("torch.jit._state")
+            .attr("_get_script_class")(qualifiedName.qualifiedName());
+    if (!pyClass.is_none()) {
+      return get_python_cu()->get_type(qualifiedName);
+    }
+
+    return nullptr;
   }
 
   TypePtr resolveType(const std::string& name, const SourceRange& loc)
@@ -781,6 +789,11 @@ void initJitScriptBindings(PyObject* module) {
                   return method.name();
                 });
               })
+          .def(
+              "_properties", [](Object& self) { return self.get_properties(); })
+          .def(
+              "equals",
+              [](Object& self, const Object& rhs) { return self.equals(rhs); })
           .def("__copy__", &Object::copy)
           .def(
               "__hash__",
@@ -1112,7 +1125,11 @@ void initJitScriptBindings(PyObject* module) {
       .def(
           "get_interface",
           [](const std::shared_ptr<CompilationUnit>& self,
-             const std::string& name) { return self->get_interface(name); });
+             const std::string& name) { return self->get_interface(name); })
+      .def(
+          "get_class",
+          [](const std::shared_ptr<CompilationUnit>& self,
+             const std::string& name) { return self->get_class(name); });
 
   py::class_<StrongFunctionPtr>(m, "ScriptFunction", py::dynamic_attr())
       .def(
@@ -1551,9 +1568,12 @@ void initJitScriptBindings(PyObject* module) {
 
   m.def("_get_graph_executor_optimize", &torch::jit::getGraphExecutorOptimize);
 
-  m.def("_create_module_with_type", [](const ClassTypePtr& type) {
-    return Module(get_python_cu(), type);
-  });
+  m.def(
+       "_create_module_with_type",
+       [](const ClassTypePtr& type) { return Module(get_python_cu(), type); })
+      .def("_create_object_with_type", [](const ClassTypePtr& type) {
+        return Object(get_python_cu(), type);
+      });
 
   m.def("_export_opnames", [](Module& sm) {
     return debugMakeList(torch::jit::export_opnames(sm));

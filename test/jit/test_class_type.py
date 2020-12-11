@@ -22,6 +22,37 @@ if __name__ == '__main__':
                        "instead.")
 
 class TestClassType(JitTestCase):
+    def test_reference_semantics(self):
+        """
+        Test that modifications made to a class instance in TorchScript
+        are visible in eager.
+        """
+        global Foo
+
+        @torch.jit.script
+        class Foo(object):
+            def __init__(self, a: int):
+                self.a = a
+
+            def set_a(self, value: int):
+                self.a = value
+
+            def get_a(self) -> int:
+                return self.a
+
+            @staticmethod
+            def static_method(a):
+                pass
+
+        def test_fn(obj: Foo):
+            obj.set_a(2)
+
+        scripted_fn = torch.jit.script(test_fn)
+        obj = Foo(1)
+
+        scripted_fn(obj)
+        self.assertEqual(obj.get_a(), 2)
+
     def test_get_with_method(self):
         class FooTest(object):
             def __init__(self, x):
@@ -306,7 +337,7 @@ class TestClassType(JitTestCase):
         self.assertEqual(y, f.y)
 
         # pass in and out of script
-        f2 = use_foo(f)
+        f2 = use_foo(torch.jit.script(f))
 
         self.assertEqual(x, f2.x)
         self.assertEqual(y, f2.y)
@@ -314,6 +345,7 @@ class TestClassType(JitTestCase):
     def test_class_specialization(self):
         global Foo  # see [local resolution in python]
 
+        @torch.jit.script
         class Foo(object):  # noqa: B903
             def __init__(self, x, y):
                 self.x = x
@@ -339,6 +371,7 @@ class TestClassType(JitTestCase):
     def test_class_sorting(self):
         global Foo  # see [local resolution in python]
 
+        @torch.jit.script
         class Foo(object):  # noqa: B903
             def __init__(self, x):
                 # type: (int) -> None
@@ -440,7 +473,7 @@ class TestClassType(JitTestCase):
             def two(self, x):
                 return x + self.b
 
-        with self.assertRaisesRegex(RuntimeError, "does not support inheritance"):
+        with self.assertRaisesRegex(TypeError, r"takes 2 positional arguments but 4 were given"):
             @torch.jit.script
             class Derived(Base):
                 def two(self, x):
@@ -667,7 +700,7 @@ class TestClassType(JitTestCase):
                 pass
 
         with self.assertRaisesRegex(RuntimeError,
-                                    "the value is not a TorchScript compatible type"):
+                                    "is not a TorchScript compatible type"):
             torch.jit.script(TestPyAssignError(PyClass()))
         # TODO test: interface-interface class-interface inheritance errors,
         # NamedTuple inheritance errors

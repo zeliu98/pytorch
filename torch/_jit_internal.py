@@ -621,7 +621,7 @@ def get_static_fn(cls, fn):
 
 
 def get_torchscript_modifier(fn):
-    if not callable(fn):
+    if not callable(fn) or isinstance(fn, torch.jit.RecursiveScriptClass):
         return None
     if hasattr(fn, '__func__'):
         fn = fn.__func__
@@ -868,7 +868,6 @@ def _qualified_name(obj):
         name = obj.name
     else:
         raise RuntimeError("Could not get name of python class object")
-
 
     if name == '<lambda>':
         name = '_lambda'  # make name a valid identifier
