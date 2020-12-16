@@ -19,6 +19,17 @@ from torch.testing._internal.common_utils import TestCase, run_tests, TemporaryF
 
 from torch.autograd.gradcheck import gradgradcheck, gradcheck
 
+def has_bf16_support():
+    import subprocess
+    try:
+        # for bf16 path, OneDNN requires the cpu has intel avx512 with avx512bw,
+        # avx512vl, and avx512dq.
+        cmd = "grep avx512bw /proc/cpuinfo | grep avx512vl | grep avx512dq"
+        subprocess.check_output(cmd, shell=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
 types = [torch.float, torch.bfloat16]
 
 # Comment the line below to find out the CI machines having MKL-DNN build disabled
@@ -191,6 +202,30 @@ class TestMkldnn(TestCase):
 
             self._test_serialization(mkldnn_conv2d, (x.to_mkldnn(),))
             self._test_tracing(mkldnn_conv2d, (x.to_mkldnn(),))
+
+    @unittest.skipIf(not has_bf16_support(), "OneDNN bfloat16 path requires AVX512")
+    def test_conv2d_bf16(self):
+        options = itertools.product([1, 4], [True, False], [1, 2])
+        # compare mkldnn bf16 with fp32 path.
+        for groups, bias, dilation in options:
+            N = torch.randint(3, 10, (1,)).item()
+            C = torch.randint(1, 3, (1,)).item() * groups
+            M = torch.randint(1, 3, (1,)).item() * groups
+            x = torch.randn(N, C, 224, 224, dtype=torch.float32)
+            x_bf16 = x.bfloat16()
+            conv2d = torch.nn.Conv2d(in_channels=C,
+                                     out_channels=M,
+                                     kernel_size=3,
+                                     stride=2,
+                                     padding=1,
+                                     dilation=dilation,
+                                     bias=bias,
+                                     groups=groups).float()
+            mkldnn_conv2d = mkldnn_utils.to_mkldnn(copy.deepcopy(conv2d))
+            mkldnn_conv2d_bf16 = mkldnn_utils.to_mkldnn(copy.deepcopy(conv2d), torch.bfloat16)
+            y = mkldnn_conv2d(x.to_mkldnn()).to_dense()
+            y_bf16 = mkldnn_conv2d_bf16(x_bf16.to_mkldnn()).to_dense(torch.float32)
+            self.assertEqual(y, y_bf16, atol=1e-1, rtol=1e-5)
 
     def test_conv2d_legacy_jit_model(self):
         """
@@ -589,6 +624,21 @@ class TestMkldnn(TestCase):
 
             self._test_serialization(mkldnn_linear, (x.to_mkldnn(),))
             self._test_tracing(mkldnn_linear, (x.to_mkldnn(),))
+
+    @unittest.skipIf(not has_bf16_support(), "OneDNN bfloat16 path requires AVX512")
+    def test_linear_bf16(self):
+        in_features = torch.randint(3, 10, (1,)).item()
+        out_features = torch.randint(3, 100, (1,)).item()
+        x = torch.randn(3, in_features, dtype=torch.float32) * 10
+        x_bf16 = x.bfloat16()
+
+        for bias in [True, False]:
+            linear = torch.nn.Linear(in_features, out_features, bias=bias).float()
+            mkldnn_linear = mkldnn_utils.to_mkldnn(copy.deepcopy(linear))
+            mkldnn_linear_bf16 = mkldnn_utils.to_mkldnn(copy.deepcopy(linear), torch.bfloat16)
+            y = mkldnn_linear(x.to_mkldnn()).to_dense()
+            y_bf16 = mkldnn_linear_bf16(x_bf16.to_mkldnn()).to_dense(torch.float32)
+            self.assertEqual(y, y_bf16, atol=1e-1, rtol=1e-5)
 
     def test_softmax(self):
         x = torch.randn(3, 4, 5, dtype=torch.float32) * 10
