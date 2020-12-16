@@ -1,6 +1,7 @@
 // ${generated_comment}
 
 #include <ATen/Functions.h>
+#include <ATen/ScalarOps.h>
 
 #include <ATen/core/dispatch/Dispatcher.h>
 #include <ATen/core/op_registration/hacky_wrapper_for_legacy_signatures.h>
@@ -21,6 +22,10 @@ Tensor std(const Tensor& self, int dim) {
 
 std::tuple<Tensor,Tensor> std_mean(const Tensor& self, int dim) {
   return at::std_mean(self, IntArrayRef{dim});
+}
+
+Tensor add(const Tensor& self, Scalar other, Scalar alpha) {
+  return at::add(self, wrapped_scalar_tensor(other), alpha);
 }
 
 ${function_definitions}

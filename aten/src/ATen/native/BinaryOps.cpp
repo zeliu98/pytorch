@@ -63,12 +63,6 @@ DEFINE_DISPATCH(nextafter_stub);
 DEFINE_DISPATCH(heaviside_stub);
 DEFINE_DISPATCH(copysign_stub);
 
-static Tensor wrapped_scalar_tensor(Scalar scalar) {
-  auto tensor = scalar_to_tensor(scalar);
-  tensor.unsafeGetTensorImpl()->set_wrapped_number(true);
-  return tensor;
-}
-
 TORCH_IMPL_FUNC(add_out) (
   Tensor& result, const Tensor& self, const Tensor& other, Scalar alpha
 ) {
