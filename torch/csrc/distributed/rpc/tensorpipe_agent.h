@@ -9,6 +9,7 @@
 #include <c10d/PrefixStore.hpp>
 #include <c10d/ProcessGroup.hpp>
 #include <c10d/Store.hpp>
+#include <torch/csrc/distributed/rpc/macros.h>
 #include <torch/csrc/distributed/rpc/rpc_agent.h>
 
 
@@ -16,10 +17,6 @@
 // headers in PyTorch's ones and thus have it become a public dependency.
 
 namespace tensorpipe {
-
-#if defined(USE_CUDA) && !defined(__HIP_PLATFORM_HCC__)
-#define USE_CUDA_NOT_ROCM
-#endif
 
 class CpuBuffer;
 
@@ -58,6 +55,8 @@ using DeviceMap = std::unordered_map<c10::DeviceIndex, c10::DeviceIndex>;
 namespace torch {
 namespace distributed {
 namespace rpc {
+
+class FullDeviceContext;
 
 using steady_clock_time_point =
     std::chrono::time_point<std::chrono::steady_clock>;
@@ -163,6 +162,7 @@ struct AggregatedNetworkData {
   uint64_t totalErrors{0};
 };
 
+
 // TensorPipeAgent leverages TensorPipe (https://github.com/pytorch/tensorpipe)
 // to transparently move tensors and payloads through the fastest available
 // transport or channel. It acts like a hybrid RPC transport, providing shared
@@ -229,7 +229,10 @@ class TensorPipeAgent : public RpcAgent {
   // by client, and read request messages by server.
   void pipeRead(
       const std::shared_ptr<tensorpipe::Pipe>&,
-      std::function<void(const tensorpipe::Error&, Message&&)>) noexcept;
+      std::function<void(
+          const tensorpipe::Error&,
+          Message&&,
+          std::shared_ptr<FullDeviceContext>)>) noexcept;
 
   // TensorPipe write function that could be used to write response
   // messages by server, and write request messages by client.
@@ -237,6 +240,7 @@ class TensorPipeAgent : public RpcAgent {
       const std::shared_ptr<tensorpipe::Pipe>&,
       Message&& message,
       std::vector<c10::DeviceIndex>&& devices,
+      std::shared_ptr<FullDeviceContext> ctx,
       std::function<void(const tensorpipe::Error&)>) noexcept;
 
   // Callback of listener accept()
@@ -250,7 +254,8 @@ class TensorPipeAgent : public RpcAgent {
   void sendCompletedResponseMessage(
       std::shared_ptr<tensorpipe::Pipe>& pipe,
       std::shared_ptr<FutureMessage>& futureResponseMessage,
-      uint64_t messageId);
+      uint64_t messageId,
+      std::shared_ptr<FullDeviceContext> ctx);
 
   // Collects metrics from successful RPC calls
   void trackNetworkData(
