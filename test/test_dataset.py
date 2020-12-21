@@ -1,5 +1,6 @@
 import tempfile
 import tarfile
+import zipfile
 import warnings
 import os
 
@@ -10,7 +11,8 @@ from torch.utils.data.datasets import \
     (CollateIterableDataset, BatchIterableDataset, SamplerIterableDataset)
 
 from torch.utils.data.datasets import (
-    ListDirFilesIterableDataset, LoadFilesFromDiskIterableDataset, ReadFilesFromTarIterableDataset)
+    ListDirFilesIterableDataset, LoadFilesFromDiskIterableDataset, ReadFilesFromTarIterableDataset,
+    ReadFilesFromZipIterableDataset)
 
 def create_temp_dir_and_files():
     # The temp dir and files within it will be released and deleted in tearDown().
@@ -78,6 +80,34 @@ class TestIterableDatasetBasic(TestCase):
             self.assertEqual(rec[1].read(), open(temp_file, 'rb').read())
         self.assertEqual(count, len(self.temp_files))
         # read extracted files after reaching the end of the tarfile
+        count = 0
+        data_refs = []
+        for rec in dataset3:
+            count = count + 1
+            data_refs.append(rec)
+        self.assertEqual(count, len(self.temp_files))
+        for i in range(0, count):
+            self.assertEqual(os.path.basename(data_refs[i][0]), os.path.basename(self.temp_files[i]))
+            self.assertEqual(data_refs[i][1].read(), open(self.temp_files[i], 'rb').read())
+
+    def test_readfilesfromzip_iterable_dataset(self):
+        temp_dir = self.temp_dir.name
+        temp_zipfile_pathname = os.path.join(temp_dir, "test_zip.zip")
+        with zipfile.ZipFile(temp_zipfile_pathname, 'w') as myzip:
+            myzip.write(self.temp_files[0])
+            myzip.write(self.temp_files[1])
+            myzip.write(self.temp_files[2])
+        dataset1 = ListDirFilesIterableDataset(temp_dir, '*.zip')
+        dataset2 = LoadFilesFromDiskIterableDataset(dataset1)
+        dataset3 = ReadFilesFromZipIterableDataset(dataset2)
+        # read extracted files before reaching the end of the zipfile
+        count = 0
+        for rec, temp_file in zip(dataset3, self.temp_files):
+            count = count + 1
+            self.assertEqual(os.path.basename(rec[0]), os.path.basename(temp_file))
+            self.assertEqual(rec[1].read(), open(temp_file, 'rb').read())
+        self.assertEqual(count, len(self.temp_files))
+        # read extracted files before reaching the end of the zipile
         count = 0
         data_refs = []
         for rec in dataset3:
