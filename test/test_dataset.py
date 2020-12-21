@@ -1,24 +1,35 @@
 import tempfile
+import tarfile
 import warnings
+import os
 
 import torch
 from torch.testing._internal.common_utils import (TestCase, run_tests)
 from torch.utils.data import IterableDataset, RandomSampler
 from torch.utils.data.datasets import \
-    (CollateIterableDataset, BatchIterableDataset, ListDirFilesIterableDataset,
-     LoadFilesFromDiskIterableDataset, SamplerIterableDataset)
+    (CollateIterableDataset, BatchIterableDataset, SamplerIterableDataset)
 
+from torch.utils.data.datasets import (
+    ListDirFilesIterableDataset, LoadFilesFromDiskIterableDataset, ReadFilesFromTarIterableDataset)
 
 def create_temp_dir_and_files():
     # The temp dir and files within it will be released and deleted in tearDown().
     # Adding `noqa: P201` to avoid mypy's warning on not releasing the dir handle within this function.
     temp_dir = tempfile.TemporaryDirectory()  # noqa: P201
     temp_dir_path = temp_dir.name
-    temp_file1 = tempfile.NamedTemporaryFile(dir=temp_dir_path, delete=False)  # noqa: P201
-    temp_file2 = tempfile.NamedTemporaryFile(dir=temp_dir_path, delete=False)  # noqa: P201
-    temp_file3 = tempfile.NamedTemporaryFile(dir=temp_dir_path, delete=False)  # noqa: P201
+    with tempfile.NamedTemporaryFile(dir=temp_dir_path, delete=False) as f:
+        temp_file1_name = f.name
+    with tempfile.NamedTemporaryFile(dir=temp_dir_path, delete=False) as f:
+        temp_file2_name = f.name
+    with tempfile.NamedTemporaryFile(dir=temp_dir_path, delete=False) as f:
+        temp_file3_name = f.name
 
-    return (temp_dir, temp_file1.name, temp_file2.name, temp_file3.name)
+    with open(temp_file1_name, 'w') as f1:
+        f1.write('0123456789abcdef')
+    with open(temp_file2_name, 'wb') as f2:
+        f2.write(b"0123456789abcdef")
+
+    return (temp_dir, temp_file1_name, temp_file2_name, temp_file3_name)
 
 
 class TestIterableDatasetBasic(TestCase):
@@ -48,6 +59,34 @@ class TestIterableDatasetBasic(TestCase):
         for rec in dataset2:
             self.assertTrue(rec[0] in self.temp_files)
             self.assertTrue(rec[1].read() == open(rec[0], 'rb').read())
+
+    def test_readfilesfromtar_iterable_dataset(self):
+        temp_dir = self.temp_dir.name
+        temp_tarfile_pathname = os.path.join(temp_dir, "test_tar.tar")
+        with tarfile.open(temp_tarfile_pathname, "w:gz") as tar:
+            tar.add(self.temp_files[0])
+            tar.add(self.temp_files[1])
+            tar.add(self.temp_files[2])
+        dataset1 = ListDirFilesIterableDataset(temp_dir, '*.tar')
+        dataset2 = LoadFilesFromDiskIterableDataset(dataset1)
+        dataset3 = ReadFilesFromTarIterableDataset(dataset2)
+        # read extracted files before reaching the end of the tarfile
+        count = 0
+        for rec, temp_file in zip(dataset3, self.temp_files):
+            count = count + 1
+            self.assertEqual(os.path.basename(rec[0]), os.path.basename(temp_file))
+            self.assertEqual(rec[1].read(), open(temp_file, 'rb').read())
+        self.assertEqual(count, len(self.temp_files))
+        # read extracted files after reaching the end of the tarfile
+        count = 0
+        data_refs = []
+        for rec in dataset3:
+            count = count + 1
+            data_refs.append(rec)
+        self.assertEqual(count, len(self.temp_files))
+        for i in range(0, count):
+            self.assertEqual(os.path.basename(data_refs[i][0]), os.path.basename(self.temp_files[i]))
+            self.assertEqual(data_refs[i][1].read(), open(self.temp_files[i], 'rb').read())
 
 
 class IterDatasetWithoutLen(IterableDataset):
