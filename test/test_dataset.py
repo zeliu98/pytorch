@@ -18,7 +18,7 @@ from torch.utils.data.datasets.decoder import (
 
 from torch.utils.data.datasets import (
     ListDirFilesIterableDataset, LoadFilesFromDiskIterableDataset, ReadFilesFromTarIterableDataset,
-    ReadFilesFromZipIterableDataset, RoutedDecoderIterableDataset)
+    ReadFilesFromZipIterableDataset, RoutedDecoderIterableDataset, GroupByFilenameIterableDataset)
 
 def create_temp_dir_and_files():
     # The temp dir and files within it will be released and deleted in tearDown().
@@ -141,6 +141,37 @@ class TestIterableDatasetBasic(TestCase):
                 self.assertTrue(np.array_equal(rec[1], expected))
             else:
                 self.assertTrue(rec[1] == open(rec[0], 'rb').read().decode('utf-8'))
+
+    def test_groupbyfilename_iterable_dataset(self):
+        temp_dir = self.temp_dir.name
+        temp_tarfile_pathname = os.path.join(temp_dir, "test_tar.tar")
+        file_list = [
+            "a.png", "b.png", "c.json", "a.json", "c.png", "b.json", "d.png",
+            "d.json", "e.png", "f.json", "g.png", "f.png", "g.json", "e.json",
+            "h.txt", "h.json"]
+        with tarfile.open(temp_tarfile_pathname, "w:gz") as tar:
+            for file_name in file_list:
+                file_pathname = os.path.join(temp_dir, file_name)
+                with open(file_pathname, 'w') as f:
+                    f.write('12345abcde')
+                tar.add(file_pathname)
+
+        dataset1 = ListDirFilesIterableDataset(temp_dir, '*.tar')
+        dataset2 = LoadFilesFromDiskIterableDataset(dataset1)
+        dataset3 = ReadFilesFromTarIterableDataset(dataset2)
+        dataset4 = GroupByFilenameIterableDataset(dataset3, group_size=2)
+
+        expected_result = [("a.png", "a.json"), ("c.png", "c.json"), ("b.png", "b.json"), ("d.png", "d.json"), (
+            "f.png", "f.json"), ("g.png", "g.json"), ("e.png", "e.json"), ("h.json", "h.txt")]
+
+        count = 0
+        for rec, expected in zip(dataset4, expected_result):
+            count = count + 1
+            self.assertEqual(os.path.basename(rec[0][0]), expected[0])
+            self.assertEqual(os.path.basename(rec[1][0]), expected[1])
+            self.assertEqual(rec[0][1].read(), b'12345abcde')
+            self.assertEqual(rec[1][1].read(), b'12345abcde')
+        self.assertEqual(count, 8)
 
 
 class IterDatasetWithoutLen(IterableDataset):
