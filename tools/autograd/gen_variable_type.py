@@ -23,7 +23,7 @@
 #     differentiable subcomponents.
 #
 
-from .utils import CodeTemplate, nested_dict, write, make_out_api_name_faithful
+from .utils import CodeTemplate, nested_dict, write
 from .gen_autograd import VIEW_FUNCTIONS, VIEW_FUNCTIONS_WITH_METADATA_CHANGE, \
     MULTI_OUTPUT_SAFE_FUNCTIONS, RETURNS_VIEWS_OF_INPUT
 from .gen_autograd_functions import uses_single_grad
@@ -167,11 +167,11 @@ ${return_type} ${type_wrapper_name}(${formals}) {
 
 # See NOTE[UnboxedOnly]
 UNBOXEDONLY_WRAPPER_REGISTRATION = CodeTemplate("""\
-m.impl_UNBOXED("${unqual_operator_name_with_overload}", &${class_type}::${type_wrapper_name});
+m.impl_UNBOXED_withKeys("${unqual_operator_name_with_overload}", &${class_type}::${type_wrapper_name});
 """)
 
 WRAPPER_REGISTRATION = CodeTemplate("""\
-m.impl("${unqual_operator_name_with_overload}",
+m.impl_withKeys("${unqual_operator_name_with_overload}",
        TORCH_FN(${class_type}::${type_wrapper_name})
 );
 """)
@@ -209,10 +209,14 @@ grad_fn->set_next_edges(collect_next_edges( ${args_with_derivatives} ));
 """)
 
 CALL_DISPATCH_VIA_NAMESPACE = CodeTemplate("""\
-at::${api_name}(${unpacked_args})""")
+c10::Dispatcher::singleton()
+  .redispatch<${ret_and_arg_types}>(${redispatch_args})""")
+# at::${api_name}(${unpacked_args})""")
 
 CALL_DISPATCH_VIA_METHOD = CodeTemplate("""\
-${var}.${api_name}(${unpacked_method_args})""")
+c10::Dispatcher::singleton()
+  .redispatch<${ret_and_arg_types}>(${redispatch_args})""")
+# ${var}.${api_name}(${unpacked_method_args})""")
 
 # If the non-variable operation has return values, we use the `tmp` variable to hold the
 # values temporarily and pass the values to the return variables outside of the
@@ -220,6 +224,9 @@ ${var}.${api_name}(${unpacked_method_args})""")
 DISPATCH_TO_NON_VAR_TYPE_WITH_TMP_RETURN_VALUES = CodeTemplate("""\
 auto tmp = ([&]() {
   at::AutoNonVariableTypeMode non_var_type_mode(true);
+  static auto op = c10::Dispatcher::singleton()
+    .findSchemaOrThrow("aten::${operator_name}", "${overload_name}")
+    .typed<${arg_types}>();
   return ${base_type_call};
 })();
 """)
@@ -245,6 +252,9 @@ if (${is_view_with_metadata_change} || !self.unsafeGetTensorImpl()->support_as_s
 
 REPLAY_VIEW_LAMBDA_FUNC = CodeTemplate("""\
 func = [=](const at::Tensor& ${input_base}) {
+  static auto op = c10::Dispatcher::singleton()
+    .findSchemaOrThrow("aten::${operator_name}", "${overload_name}")
+    .typed<${arg_types}>();
   return ${replay_view_call};
 };
 """)
@@ -252,6 +262,9 @@ func = [=](const at::Tensor& ${input_base}) {
 DISPATCH_TO_NON_VAR_TYPE_WITHOUT_RETURN_VALUES = CodeTemplate("""\
 {
   at::AutoNonVariableTypeMode non_var_type_mode(true);
+  static auto op = c10::Dispatcher::singleton()
+    .findSchemaOrThrow("aten::${operator_name}", "${overload_name}")
+    .typed<${arg_types}>();
   ${base_type_call};
 }
 """)
@@ -355,10 +368,10 @@ def gen_variable_type_shard(out, aten_declarations, template_path, suffix, heade
 
     for declaration in aten_declarations:
         if declaration['use_c10_dispatcher'] in ['full', 'hacky_wrapper_for_legacy_signatures']:
-            formals = declaration['schema_order_formals']
+            formals = ['c10::DispatchKeySet ks'] + declaration['schema_order_formals']
         else:
             assert declaration['use_c10_dispatcher'] == 'with_codegenerated_unboxing_wrapper'
-            formals = declaration['formals']
+            formals = ['c10::DispatchKeySet ks'] + declaration['formals']
         type_declarations.append(METHOD_DECLARATION.substitute(declaration, formals=formals))
         strategy = dispatch_strategy(declaration)
         if declaration['name'] not in MANUAL_AUTOGRAD and strategy == 'use_derived':
@@ -613,24 +626,6 @@ def emit_body(declaration):
                 stmts.append('}')
         return stmts
 
-    def emit_dispatch_call(api_name, input_base, unpacked_args):
-        """ Dispatch call via function in a namespace or method on Tensor."""
-        if 'namespace' in declaration['method_of']:
-            if declaration['use_c10_dispatcher'] in ['hacky_wrapper_for_legacy_signatures', 'full']:
-                dispatcher_api_name = make_out_api_name_faithful(api_name)
-            else:
-                assert declaration['use_c10_dispatcher'] == 'with_codegenerated_unboxing_wrapper'
-                dispatcher_api_name = api_name
-            call = CALL_DISPATCH_VIA_NAMESPACE.substitute(
-                api_name=dispatcher_api_name,
-                unpacked_args=unpacked_args)
-        else:
-            call = CALL_DISPATCH_VIA_METHOD.substitute(
-                api_name=api_name,
-                var=input_base,
-                unpacked_method_args=unpacked_args[1:])
-        return call
-
     def emit_view_lambda():
         """ Generate an additional lambda function to recover views in backward when as_strided is not supported.
         See Note [View + Inplace update for base tensor] and [View + Inplace update for view tensor] for more details."""
@@ -664,8 +659,23 @@ def emit_body(declaration):
             else:
                 updated_unpacked_args.append(arg)
 
-        replay_view_call = emit_dispatch_call(combined['api_name'], input_base, updated_unpacked_args)
+        # TODO: hack to deal with c10-ness. This will disappear when I write this in the new codegen
+        args = combined['schema_order_arguments'] if  \
+            combined['use_c10_dispatcher'] in ['full', 'hacky_wrapper_for_legacy_signatures'] else combined['arguments']
+        arg_types = [a['type'] for a in args]
+        ret_and_arg_types = ', '.join([combined['return_type']] + arg_types)
+        # TODO: something less hacky than AutogradOther?
+        # note that we do NOT modify ks here. This is a full redispatch that should call back into the autograd kernel.
+        dispatch_key_set = 'ks'
+        redispatch_args = ['op', dispatch_key_set] + updated_unpacked_args
+        replay_view_call = CALL_DISPATCH_VIA_NAMESPACE.substitute(
+            ret_and_arg_types=ret_and_arg_types,
+            redispatch_args=redispatch_args)
+        type_signature = f"{combined['return_type']} ({', '.join(arg_types)})"
         replay_view_func += REPLAY_VIEW_LAMBDA_FUNC.substitute(
+            operator_name=combined['operator_name'],
+            overload_name=combined['overload_name'],
+            arg_types=type_signature,
             input_base=input_base,
             replay_view_call=replay_view_call)
 
@@ -753,14 +763,33 @@ def emit_body(declaration):
         # the baseType operations still dispatch to non-Variable type, even if the arguments passed
         # in are now Variables.
         # See NOTE [ Treating Variables as non-Variables in type dispatch ] for details.
-        base_type_call = emit_dispatch_call(combined['api_name'], 'self_', combined['unpacked_args'])
+        # base_type_call = emit_dispatch_call(combined['api_name'], 'self_', combined['unpacked_args'])
+        # if any([a['simple_type'] == 'TensorOptions' for a in combined['arguments']]) \
+        args = combined['schema_order_arguments'] if \
+            combined['use_c10_dispatcher'] in ['full', 'hacky_wrapper_for_legacy_signatures'] else combined['arguments']
+        arg_types = [a['type'] for a in args]
+        ret_and_arg_types = ', '.join([combined['return_type']] + arg_types)
+
+        # TODO: something less hacky than AutogradOther?
+        dispatch_key_set = 'ks & c10::DispatchKeySet(DispatchKeySet::FULL_AFTER, c10::DispatchKey::AutogradOther)'
+        redispatch_args = ['op', dispatch_key_set] + combined['unpacked_args']
+        base_type_call = CALL_DISPATCH_VIA_NAMESPACE.substitute(
+            ret_and_arg_types=ret_and_arg_types,
+            redispatch_args=redispatch_args)
+        type_signature = f"{combined['return_type']} ({', '.join(arg_types)})"
         if not modifies_arguments and not returns_void:
             call = DISPATCH_TO_NON_VAR_TYPE_WITH_TMP_RETURN_VALUES.substitute(
+                operator_name=combined['operator_name'],
+                overload_name=combined['overload_name'],
+                arg_types=type_signature,
                 base_type_call=base_type_call)
 
             call += wrap_output(tie_return_values, 'tmp')
         else:
             call = DISPATCH_TO_NON_VAR_TYPE_WITHOUT_RETURN_VALUES.substitute(
+                operator_name=combined['operator_name'],
+                overload_name=combined['overload_name'],
+                arg_types=type_signature,
                 base_type_call=base_type_call)
         call = enforce_same_tensorimpl_and_storage(env, call)
         return call

@@ -94,13 +94,15 @@ std::array<bool, N> as_bool_array(const c10::List<bool>& list) {
 }
 
 KernelFunction::InternalBoxedKernelFunction *DUMMY_OPERATION =
-  [](c10::OperatorKernel *, const c10::OperatorHandle &, std::vector<c10::IValue> *) -> void {
+  [](c10::OperatorKernel *, const c10::OperatorHandle &, c10::DispatchKeySet, std::vector<c10::IValue> *) -> void {
     TORCH_CHECK(false, "Operator has been stripped in the custom build.")
   };
 
 class Registerer final {
 public:
-  Registerer&& op(const std::string& schemaStr, KernelFunction::InternalBoxedKernelFunction* boxed_kernel_wrapper) && {
+  Registerer&& op(const std::string& schemaStr,
+                  KernelFunction::InternalBoxedKernelFunction* boxed_kernel_wrapper_old_convention_,
+                  KernelFunction::InternalBoxedKernelFunction* boxed_kernel_wrapper_new_convention_) && {
     static auto& dispatcher = c10::Dispatcher::singleton();
     auto schema = parseSchema(schemaStr);
     schema.setAliasAnalysis(AliasAnalysisKind::FROM_SCHEMA);
@@ -108,7 +110,8 @@ public:
     RegistrationHandleRAII registration = dispatcher.registerName(name);
     auto op = dispatcher.findOp(name).value();
     registrationHandles_.push_back(std::move(registration));
-    dispatcher.setManuallyBoxedKernelFor_(op, boxed_kernel_wrapper);
+    dispatcher.setManuallyBoxedKernelFor_(op, boxed_kernel_wrapper_old_convention_, false);
+    dispatcher.setManuallyBoxedKernelFor_(op, boxed_kernel_wrapper_new_convention_, true);
     return std::move(*this);
   }
 

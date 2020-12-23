@@ -824,9 +824,9 @@ class ComputeBackendSelect:
                 compute_dk = f"""\
 DispatchKeySet _dk_set = c10::DispatchKeySet({dispatch_key}) | c10::detail::multi_dispatch_key_set({tensor_args});
   DispatchKeySet _dk_mask = c10::DispatchKeySet(DispatchKeySet::FULL_AFTER, DispatchKey::BackendSelect);
-  DispatchKey _dk = c10::impl::dispatchTypeId(_dk_set, _dk_mask);"""
+  DispatchKeySet _dk = c10::impl::dispatchTypeId(_dk_set, _dk_mask);"""
             else:
-                compute_dk = f"DispatchKey _dk = {dispatch_key};"
+                compute_dk = f"DispatchKeySet _dk = c10::DispatchKeySet({dispatch_key});"
             return f"""\
 // aten::{f.func}
 {sig.defn(name)} {{
