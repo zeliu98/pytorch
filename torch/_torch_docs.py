@@ -3030,12 +3030,24 @@ Computes the element-wise remainder of division.
 The dividend and divisor may contain both for integer and floating point
 numbers. The remainder has the same sign as the dividend :attr:`input`.
 
-When :attr:`other` is a tensor, the shapes of :attr:`input` and
-:attr:`other` must be :ref:`broadcastable <broadcasting-semantics>`.
+Supports :ref:`broadcasting to a common shape <broadcasting-semantics>`,
+:ref:`type promotion <type-promotion-doc>`, and integer and float inputs.
+
+Note:
+    For the divisor as zero, returns ``NaN`` for floating-point common dtype;
+    raises ``RuntimeError`` for integral common dtype on CPU;
+    For integral common dtype On CUDA, due to it's an undefined behavior,
+    returns a pattern of all 1s for all integral dividend except int64.
+    For int64, returns all 1s for negative dividend, half 1s for positive
+    dividend. E.g.:
+        uint8: 0xff -> 255
+        int32: 0xffffffff -> -1
+        int64: 0xffffffffffffffff -> -1
+               0x00000000ffffffff -> 4294967295
 
 Args:
     input (Tensor): the dividend
-    other (Tensor or float): the divisor, which may be either a number or a tensor of the same shape as the dividend
+    other (Tensor or float/integer): the divisor, which may be either a number or a tensor
 
 Keyword args:
     {out}
@@ -3044,9 +3056,8 @@ Example::
 
     >>> torch.fmod(torch.tensor([-3., -2, -1, 1, 2, 3]), 2)
     tensor([-1., -0., -1.,  1.,  0.,  1.])
-    >>> torch.fmod(torch.tensor([1., 2, 3, 4, 5]), 1.5)
-    tensor([ 1.0000,  0.5000,  0.0000,  1.0000,  0.5000])
-
+    >>> torch.fmod(torch.tensor([1, 2, 3, 4, 5]), 1.5)
+    tensor([1.0000, 0.5000, 0.0000, 1.0000, 0.5000])
 
 """.format(**common_args))
 
