@@ -197,7 +197,11 @@ class Graph:
             if node.op == 'output':
                 rv = map_arg(node.args[0], lambda n: val_map[n])
                 return rv
-            val_map[node] = self.node_copy(node, lambda n : val_map[n])
+            if node.op == 'placeholder':
+                with self.inserting_before(None):
+                    val_map[node] = self.node_copy(node, lambda n : val_map[n])
+            else:
+                val_map[node] = self.node_copy(node, lambda n : val_map[n])
         return None
 
     def __deepcopy__(self, memo=None) -> 'Graph':
