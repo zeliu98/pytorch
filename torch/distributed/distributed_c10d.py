@@ -1,8 +1,8 @@
+import contextlib
+import logging
 import pickle
 import torch
 import warnings
-import contextlib
-import sys
 import time
 from torch._six import string_classes
 from datetime import timedelta
@@ -18,7 +18,6 @@ from torch._C._distributed_c10d import (
     AllreduceCoalescedOptions,
     AllToAllOptions,
     BroadcastOptions,
-    FileStore,
     GatherOptions,
     PrefixStore,
     ProcessGroup,
@@ -27,14 +26,7 @@ from torch._C._distributed_c10d import (
     ReduceScatterOptions,
     ScatterOptions,
     Store,
-    TCPStore,
 )
-
-if sys.platform != 'win32':
-    from torch._C._distributed_c10d import (
-        HashStore,
-    )
-
 
 _MPI_AVAILABLE = True
 _NCCL_AVAILABLE = True
@@ -191,16 +183,25 @@ def _store_based_barrier(rank, store, timeout):
     """
     store_key = "{}:{}".format(STORE_BASED_BARRIER_PREFIX, _group_count)
     store.add(store_key, 1)
+    logging.info('Added key: {} to store for rank: {}'.format(store_key, rank))
 
     # Now wait for all workers to check in with the store.
     world_size = get_world_size()
-    worker_count = int(store.get(store_key))
+    # Use 'add' instead of 'get' since for some store implementations 'add'
+    # doesn't work well with 'get'. Ideally the store implementations should
+    # be fixed, but for backward compatiblity reasons it is risky to change
+    # the store implementations. Once, we completely migrate away from these
+    # legacy stores, we can use 'get' here instead.
+    worker_count = store.add(store_key, 0)
     start = time.time()
     while worker_count != world_size:
         time.sleep(0.01)
-        worker_count = int(store.get(store_key))
+        worker_count = store.add(store_key, 0)
         if timedelta(seconds=(time.time() - start)) > timeout:
-            raise RuntimeError("Timed out initializing process group")
+            raise RuntimeError(
+                "Timed out initializing process group in store based barrier on "
+                "rank: {}, for key: {} (world_size={}, worker_count={})".format(
+                    rank, store_key, world_size, worker_count))
 
 def _rank_not_in_group(group: ProcessGroup):
     """
@@ -504,12 +505,8 @@ def init_process_group(backend,
     # barrier at the end to ensure that once we return from this method, all
     # process groups including global variables are updated correctly on all
     # ranks.
-    if backend == Backend.MPI or not (
-        isinstance(store, TCPStore) or
-        isinstance(store, FileStore) or
-        (sys.platform != 'win32' and isinstance(store, HashStore))
-    ):
-        # MPI doesn't have store.
+    if backend == Backend.MPI:
+        # MPI backend doesn't use store.
         barrier()
     else:
         # Use store based barrier here since barrier() used a bunch of
@@ -2491,16 +2488,12 @@ def new_group(ranks=None, timeout=default_pg_timeout, backend=None):
     # barrier at the end to ensure that once we return from this method, all
     # process groups including global variables are updated correctly on all
     # ranks.
-    if backend == Backend.MPI or not (
-        isinstance(default_store, TCPStore) or
-        isinstance(default_store, FileStore) or
-        (sys.platform != 'win32' and isinstance(default_store, HashStore))
-    ):
+    if backend == Backend.MPI:
         # MPI doesn't have store.
         barrier()
     else:
         # Use store based barrier here since barrier() used a bunch of
         # default devices and messes up NCCL internal state.
-        _store_based_barrier(group_rank, default_store, timeout)
+        _store_based_barrier(global_rank, default_store, timeout)
 
     return pg
