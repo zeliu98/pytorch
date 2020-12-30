@@ -172,15 +172,110 @@ struct VISIBILITY_HIDDEN ModuleValue : public SugaredValue {
   bool hasAttr(const SourceRange& loc, Function& m, const std::string& field)
       override;
 
-  // call module.forward
+  // call module.forward with pre_hooks and hooks
   std::shared_ptr<SugaredValue> call(
       const SourceRange& loc,
       Function& caller,
       at::ArrayRef<NamedValue> args,
       at::ArrayRef<NamedValue> kwargs,
       size_t n_binders) override {
-    return attr(loc, caller, "forward")
-        ->call(loc, caller, args, kwargs, n_binders);
+    bool is_class_type =
+        concreteType_->getJitType()->cast<ClassType>() != nullptr;
+    bool have_pre_hooks = is_class_type &&
+        concreteType_->getJitType()
+                ->expect<ClassType>()
+                ->getForwardPreHooks()
+                .size() != 0;
+    bool have_hooks = is_class_type &&
+        concreteType_->getJitType()
+                ->expect<ClassType>()
+                ->getForwardHooks()
+                .size() != 0;
+    std::vector<Value*> arg_values;
+    std::vector<NamedValue> pre_hook_result;
+    Value* forward_input;
+
+    if (have_pre_hooks || have_hooks) {
+      // convert forward args into tuple for forward hooks
+      // (the input of eager hooks are always tuples)
+      for (const auto& sv : args) {
+        arg_values.push_back(sv.value(*caller.graph()));
+      }
+      // create fake none if forward has no input
+      if (args.size() == 0) {
+        arg_values.push_back(caller.graph()->createNone()->output());
+      }
+      forward_input = caller.graph()
+                          ->insertNode(caller.graph()->createTuple(arg_values))
+                          ->output();
+    }
+
+    // call pre_hooks
+    if (have_pre_hooks) {
+      for (const auto& hook : concreteType_->getJitType()
+                                  ->expect<ClassType>()
+                                  ->getForwardPreHooks()) {
+        Value* pre_hook_output =
+            FunctionValue(hook)
+                .call(
+                    loc,
+                    caller,
+                    {NamedValue(self_), NamedValue(forward_input)},
+                    kwargs,
+                    n_binders)
+                ->asValue(loc, caller);
+        if (pre_hook_output->node()->output(0)->type() != NoneType::get()) {
+          if (pre_hook_output->node()->output(0)->type()->kind() !=
+              TypeKind::TupleType) {
+            pre_hook_output =
+                caller.graph()
+                    ->insertNode(caller.graph()->createTuple({pre_hook_output}))
+                    ->output();
+          }
+          forward_input = pre_hook_output;
+        }
+      }
+      // de-tuple pre_hook output for forward
+      at::ArrayRef<Value*> output_nodes =
+          caller.graph()
+              ->insertNode(caller.graph()->createTupleUnpack(forward_input))
+              ->outputs();
+      for (auto& output_node : output_nodes) {
+        pre_hook_result.emplace_back(NamedValue(output_node));
+      }
+      if (args.size() != 0) { // only replace input if it existed
+        args = pre_hook_result;
+      }
+    }
+
+    // call forward
+    std::shared_ptr<SugaredValue> forwardSV =
+        attr(loc, caller, "forward")
+            ->call(loc, caller, args, kwargs, n_binders);
+    Value* forward_output = forwardSV->asValue(loc, caller);
+
+    // call hooks
+    if (have_hooks) {
+      for (const auto& hook : concreteType_->getJitType()
+                                  ->expect<ClassType>()
+                                  ->getForwardHooks()) {
+        Value* forward_hook_output = FunctionValue(hook)
+                                         .call(
+                                             loc,
+                                             caller,
+                                             {NamedValue(self_),
+                                              NamedValue(forward_input),
+                                              NamedValue(forward_output)},
+                                             kwargs,
+                                             n_binders)
+                                         ->asValue(loc, caller);
+        if (forward_hook_output->node()->output(0)->type() != NoneType::get()) {
+          forward_output = forward_hook_output;
+        }
+      }
+    }
+
+    return std::make_shared<SimpleValue>(forward_output);
   }
 
   std::shared_ptr<SugaredDict> getSugaredDict(
