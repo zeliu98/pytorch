@@ -4,10 +4,12 @@
 #include <torch/csrc/jit/ir/attributes.h>
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/ir/type_hashing.h>
+#include <torch/csrc/jit/mobile/common_const.h>
 #include <torch/csrc/jit/mobile/function.h>
 #include <torch/csrc/jit/mobile/interpreter.h>
 #include <torch/csrc/jit/mobile/method.h>
 #include <torch/csrc/jit/mobile/module.h>
+#include <torch/csrc/jit/mobile/tensor_hash.h>
 #include <torch/csrc/jit/passes/inliner.h>
 #include <torch/csrc/jit/runtime/instruction.h>
 #include <torch/csrc/jit/serialization/import_export_constants.h>
@@ -30,7 +32,6 @@ namespace torch {
 namespace jit {
 
 char const* toString(OpCode op);
-
 namespace {
 
 ExportModuleExtraFilesHook& GetExtraFilesHook() {
@@ -338,9 +339,20 @@ class ScriptModuleSerializer {
     // so loading the code does not depend on loading the data
     std::vector<IValue> ivalue_constants(
         constant_table_.begin(), constant_table_.end());
+
+    std::unordered_map<at::Tensor, int, MyHash, MyEqual> constants_from_jit;
+
+    for (size_t i = 0; i < ivalue_constants.size(); i++) {
+      if (ivalue_constants[i].isTensor() &&
+          constants_from_jit.find(ivalue_constants[i].toTensor()) ==
+              constants_from_jit.end()) {
+        constants_from_jit[ivalue_constants[i].toTensor()] = i;
+      }
+    }
+
     writeArchive("constants", c10::ivalue::Tuple::create(ivalue_constants));
     if (bytecode_format) {
-      writeByteCode(module, save_mobile_debug_info);
+      writeByteCode(module, save_mobile_debug_info, constants_from_jit);
       writeMobileMetadata(module, extra_files);
     }
 
@@ -468,7 +480,92 @@ class ScriptModuleSerializer {
     }
   }
 
-  void writeByteCode(const Module& module, bool save_mobile_debug_info) {
+  std::vector<IValue> deduplicate_constants(
+      std::vector<IValue>& elements,
+      const std::unordered_map<at::Tensor, int, MyHash, MyEqual>&
+          constants_from_jit) {
+    std::vector<IValue> deduplicated_elements;
+
+    bool is_constant_element = false;
+    c10::ivalue::ConstantString constants_str("constants");
+    auto constants_ir = IValue(constants_str);
+
+    for (const auto& element : elements) {
+      if (element.isTuple()) {
+        const auto& bytecode_elements = element.toTuple()->elements();
+        std::vector<IValue> deduplicate_bytecode_elements;
+        for (const auto& bytecode_element : bytecode_elements) {
+          if (bytecode_element.isTuple()) {
+            const auto& key_values_pairs =
+                bytecode_element.toTuple()->elements();
+            std::vector<IValue> deduplicate_key_values_pair;
+            for (const auto& key_values_pair : key_values_pairs) {
+              is_constant_element = false;
+              if (key_values_pair.isTuple()) {
+                const auto& key_values_vector =
+                    key_values_pair.toTuple()->elements();
+                if (key_values_vector.size() == 2) {
+                  const auto& key = key_values_vector[0];
+                  const auto& values = key_values_vector[1];
+                  // find constant fields
+                  if (key.isString() && key == constants_ir) {
+                    if (values.isTuple()) {
+                      const auto& constant_values =
+                          values.toTuple()->elements();
+                      std::vector<IValue> deduplicated_constant_values;
+                      for (const auto& constant_value : constant_values) {
+                        if (constant_value.isTensor() &&
+                            constants_from_jit.find(
+                                constant_value.toTensor()) !=
+                                constants_from_jit.end()) {
+                          std::vector<IValue> index = {
+                              IValue(constants_from_jit.at(
+                                  constant_value.toTensor()))};
+                          auto index_with_key = Tup(std::vector<IValue>{
+                              IValue(mobile::kTensorJitIndex), Tup(index)});
+                          deduplicated_constant_values.push_back(
+                              index_with_key);
+                        } else {
+                          deduplicated_constant_values.push_back(
+                              constant_value);
+                        }
+                      }
+                      std::vector<IValue> deduplicated_constant_key_values = {
+                          constants_ir,
+                          Tup(std::move(deduplicated_constant_values))};
+                      deduplicate_key_values_pair.push_back(
+                          Tup(std::move(deduplicated_constant_key_values)));
+                    } else {
+                      deduplicate_key_values_pair.push_back(key_values_pair);
+                    }
+                    is_constant_element = true;
+                  }
+                }
+              }
+              if (!is_constant_element) {
+                deduplicate_key_values_pair.push_back(key_values_pair);
+              }
+            }
+            deduplicate_bytecode_elements.push_back(
+                Tup(std::move(deduplicate_key_values_pair)));
+          } else {
+            deduplicate_bytecode_elements.push_back(bytecode_element);
+          }
+        }
+        deduplicated_elements.push_back(
+            Tup(std::move(deduplicate_bytecode_elements)));
+      } else {
+        deduplicated_elements.push_back(element);
+      }
+    }
+    return deduplicated_elements;
+  }
+
+  void writeByteCode(
+      const Module& module,
+      bool save_mobile_debug_info,
+      const std::unordered_map<at::Tensor, int, MyHash, MyEqual>&
+          constants_from_jit) {
     std::vector<c10::IValue> elements;
     elements.emplace_back(
         static_cast<int64_t>(caffe2::serialize::kProducedBytecodeVersion));
@@ -478,10 +575,13 @@ class ScriptModuleSerializer {
       debug_info_elements->emplace_back(
           static_cast<int64_t>(caffe2::serialize::kProducedBytecodeVersion));
     }
-
     moduleMethodsTuple(
         module, elements, debug_info_elements, save_mobile_debug_info);
-    auto telements = Tup(std::move(elements));
+
+    auto deduplicated_elements =
+        deduplicate_constants(elements, constants_from_jit);
+    auto telements = Tup(std::move(deduplicated_elements));
+
     writeArchive("bytecode", telements);
     if (save_mobile_debug_info) {
       auto debug_info_telements = Tup(std::move(debug_info_elements.value()));

@@ -2,6 +2,7 @@
 #include <ATen/core/ivalue.h>
 #include <caffe2/serialize/inline_container.h>
 #include <torch/csrc/jit/api/compilation_unit.h>
+#include <torch/csrc/jit/mobile/common_const.h>
 #include <torch/csrc/jit/mobile/observer.h>
 #include <torch/csrc/jit/runtime/instruction.h>
 #include <torch/csrc/jit/serialization/import_export_constants.h>
@@ -76,6 +77,7 @@ std::string operator_str(
 }
 
 namespace {
+
 void print_unsupported_ops_and_throw(
     const std::unordered_set<std::string>& unsupported_ops) {
   std::string error_message("{");
@@ -92,6 +94,7 @@ void print_unsupported_ops_and_throw(
 
 void parseMethods(
     const std::vector<IValue>& vals,
+    const std::vector<IValue>& constant_vals_from_jit,
     const c10::optional<std::vector<IValue>>& debug_info_vals,
     mobile::CompilationUnit& mcu) {
   TORCH_CHECK(vals.size() > 0, "Bytecode has no elements. ");
@@ -149,6 +152,25 @@ void parseMethods(
     const auto& register_size =
         expect_field(table, "register_size", BYTECODE_INDEX_REGISTER_SIZE)
             .toInt();
+
+    std::vector<IValue> updated_constant_vals;
+    for (const auto& const_item : consts_list) {
+      if (const_item.isTuple()) {
+        const auto& tensor_jit = const_item.toTuple()->elements();
+        if (tensor_jit.size() > 1) {
+          const auto& tensor_jit_index_key = tensor_jit[0];
+          const auto& tensor_jit_index = tensor_jit[1].toTuple()->elements()[0];
+          if (tensor_jit_index_key.isString() &&
+              tensor_jit_index_key.toString().get()->string() ==
+                  mobile::kTensorJitIndex) {
+            updated_constant_vals.push_back(
+                constant_vals_from_jit[tensor_jit_index.toInt()]);
+          }
+        }
+      } else {
+        updated_constant_vals.push_back(const_item);
+      }
+    }
 
     std::vector<IValue> module_debug_info_list;
     if (has_debug_info) {
@@ -211,7 +233,7 @@ void parseMethods(
       print_unsupported_ops_and_throw(unsupported_op_names);
     };
 
-    for (const auto& constant : consts_list) {
+    for (const auto& constant : updated_constant_vals) {
       function->append_constant(constant);
     }
 
@@ -290,7 +312,12 @@ mobile::Module BytecodeDeserializer::deserialize(
   if (reader_->hasRecord("mobile_debug.pkl")) {
     debug_info_bvals = readArchive("mobile_debug", mcu).toTuple()->elements();
   }
-  parseMethods(bvals, debug_info_bvals, *mcu);
+  std::vector<IValue> constant_values_from_jit;
+  if (reader_->hasRecord("constants.pkl")) {
+    constant_values_from_jit =
+        readArchive("constants", mcu).toTuple()->elements();
+  }
+  parseMethods(bvals, constant_values_from_jit, debug_info_bvals, *mcu);
   auto meta_dict = readMobileMetadata(mcu);
   return mobile::Module(readArchive("data", mcu).toObject(), meta_dict, mcu);
 }
