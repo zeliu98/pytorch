@@ -178,14 +178,10 @@ class vTensor final {
     predictability of usage and efficiency.
   */
 
-  Buffer::Object buffer(Stage::Flags) const &;
-  Buffer::Object buffer(Stage::Flags, Access::Flags) &;
   Buffer::Object buffer(api::Command::Buffer&, Stage::Flags) const &;
   Buffer::Object buffer(api::Command::Buffer&, Stage::Flags, Access::Flags) &;
 
   bool has_image() const;
-  Image::Object image(Stage::Flags) const &;
-  Image::Object image(Stage::Flags, Access::Flags) &;
   Image::Object image(api::Command::Buffer&, Stage::Flags) const &;
   Image::Object image(api::Command::Buffer&, Stage::Flags, Access::Flags) &;
 
@@ -223,13 +219,9 @@ class vTensor final {
     Device
   */
 
-  Buffer::Object buffer(Stage::Flags) const && = delete;
-  Buffer::Object buffer(Stage::Flags, Access::Flags) && = delete;
   Buffer::Object buffer(api::Command::Buffer&, Stage::Flags) const && = delete;
   Buffer::Object buffer(api::Command::Buffer&, Stage::Flags, Access::Flags) && = delete;
 
-  Image::Object image(Stage::Flags) const && = delete;
-  Image::Object image(Stage::Flags, Access::Flags) && = delete;
   Image::Object image(api::Command::Buffer&, Stage::Flags) const && = delete;
   Image::Object image(api::Command::Buffer&, Stage::Flags, Access::Flags) && = delete;
 
@@ -249,14 +241,16 @@ class vTensor final {
     ~View() = default;
 
     /*
-      Device
+      Buffer
     */
 
-    Buffer& buffer(Stage::Flags, Access::Flags) const;
     Buffer& buffer(api::Command::Buffer&, Stage::Flags, Access::Flags) const;
 
+    /*
+      Image
+    */
+
     bool has_image() const;
-    Image& image(Stage::Flags, Access::Flags) const;
     Image& image(api::Command::Buffer&, Stage::Flags, Access::Flags) const;
 
     /*
@@ -264,7 +258,6 @@ class vTensor final {
     */
 
     Buffer& staging(Stage::Flags, Access::Flags) const;
-    Buffer& staging(api::Command::Buffer&, Stage::Flags, Access::Flags) const;
     vTensor::Memory& wait() const;
 
     /*
